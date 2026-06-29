@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Analyzer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0d14; color: #e8edf5; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+/* ── Header ── */
+.header { background: #0d1119; border-bottom: 1px solid #1c2230; padding: 12px 26px; display: flex; align-items: center; gap: 22px; }
+.logo { font-size: 19px; font-weight: 800; white-space: nowrap; letter-spacing: .5px; }
+.logo .ev { color: #e8edf5; } .logo .money { color: #34d399; }
+.logo small { display: block; color: #6b7689; font-size: 10px; font-weight: 500; letter-spacing: .5px; }
+.search-wrap { display: flex; gap: 9px; flex: 1; max-width: 380px; }
+#tickerInput { flex: 1; background: #161b28; border: 1px solid #2a3142; border-radius: 8px; padding: 9px 14px; color: #e8edf5; font-size: 15px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; outline: none; transition: border .2s; }
+#tickerInput:focus { border-color: #34d399; }
+#tickerInput::placeholder { color: #4b5567; font-weight: 400; letter-spacing: 0; text-transform: none; }
+#analyzeBtn { background: #34d399; color: #07120c; border: none; border-radius: 8px; padding: 9px 20px; font-size: 14px; font-weight: 800; cursor: pointer; transition: background .2s; }
+#analyzeBtn:hover { background: #10b981; }
+#analyzeBtn:disabled { background: #2a3142; color: #5b6478; cursor: not-allowed; }
+.level-badge { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.level-badge .lvl-txt { font-size: 11px; color: #8b95a7; text-align: right; line-height: 1.3; }
+.level-badge .lvl-txt b { color: #e8edf5; }
+.lvl-bar { width: 120px; height: 7px; background: #1c2230; border-radius: 4px; overflow: hidden; }
+.lvl-bar > div { height: 100%; width: 64%; background: linear-gradient(90deg,#34d399,#22c55e); }
+
+/* ── Main ── */
+.main { max-width: 1380px; margin: 0 auto; padding: 18px 18px 60px; }
+.placeholder { text-align: center; padding: 80px 20px; color: #4b5567; }
+.placeholder h2 { font-size: 24px; color: #5b6478; margin-bottom: 10px; }
+.status-msg { text-align: center; padding: 40px; font-size: 15px; }
+.status-msg.error { color: #f87171; text-align: left; font-size: 13px; word-break: break-all; }
+.spinner { display: inline-block; width: 34px; height: 34px; border: 3px solid #2a3142; border-top-color: #34d399; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 14px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Banner ── */
+.banner { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; padding: 16px 22px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.banner-name { font-size: 21px; font-weight: 700; }
+.banner-name span { color: #6b7689; font-size: 15px; font-weight: 400; }
+.banner-meta { color: #8b95a7; font-size: 12px; margin-top: 3px; }
+.banner-price .price { font-size: 30px; font-weight: 800; color: #34d399; text-align: right; }
+.banner-price .price-label { color: #6b7689; font-size: 11px; text-align: right; }
+
+/* ── Pillars ── */
+.pillar-block { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 16px; align-items: stretch; }
+.pillar-label { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; min-width: 92px; border-right: 1px solid #232a3a; padding-right: 14px; }
+.pillar-label .badge { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg,#34d399,#0e7490); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; color: #07120c; }
+.pillar-label .lbl { font-size: 12px; font-weight: 700; color: #b0b8c8; text-align: center; }
+.pillar-grid { flex: 1; display: grid; gap: 8px; }
+.pillar-grid.my { grid-template-columns: repeat(2, 1fr); }
+.pillar-grid.em { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 950px) { .pillar-grid.em { grid-template-columns: repeat(2, 1fr); } }
+.pcell { background: #0f1420; border: 1px solid #232a3a; border-radius: 8px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pcell .pname { font-size: 12px; color: #b0b8c8; line-height: 1.3; }
+.pcell .pthresh { font-size: 10px; color: #6b7689; }
+.pcell .pright { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.pcell .pval { font-size: 14px; font-weight: 700; }
+.pcell.pass .pval { color: #e8edf5; }
+.pcell.fail .pval { color: #e8edf5; }
+.pmark { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; flex-shrink: 0; }
+.pmark.pass { background: #22c55e; color: #07120c; }
+.pmark.fail { background: #ef4444; color: #fff; }
+.pmark.unknown { background: #3a4252; color: #8b95a7; }
+
+/* ── Metrics 4-col ── */
+.metrics-section { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+@media (max-width: 1100px) { .metrics-section { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .metrics-section { grid-template-columns: 1fr; } }
+.mcol { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; overflow: hidden; align-self: start; }
+.mcol-title { background: #0f1420; padding: 9px 14px; font-size: 10px; font-weight: 700; color: #6b7689; text-transform: uppercase; letter-spacing: .7px; border-bottom: 1px solid #232a3a; }
+.mrow { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid #1a2030; gap: 8px; }
+.mrow:last-child { border-bottom: none; }
+.mrow .ml { font-size: 13px; color: #9aa3b4; }
+.mrow .ml small { color: #5b6478; font-size: 11px; }
+.mrow .mv { font-size: 13px; font-weight: 700; color: #e8edf5; text-align: right; white-space: nowrap; }
+.mv.good { color: #34d399; } .mv.bad { color: #f87171; } .mv.neutral { color: #fbbf24; } .mv.dim { color: #6b7689; }
+.ma-arrow { display: inline-flex; align-items: center; gap: 5px; }
+.ma-arrow .ar { font-size: 12px; } .ar.up { color: #34d399; } .ar.down { color: #f87171; }
+
+/* ── Intrinsic value / rating ── */
+.iv-section { display: grid; grid-template-columns: 320px 1fr; gap: 14px; margin-bottom: 14px; }
+@media (max-width: 850px) { .iv-section { grid-template-columns: 1fr; } }
+.iv-card, .dcf-card { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; padding: 20px; }
+.iv-card { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.iv-donut-wrap { position: relative; width: 200px; height: 200px; }
+.iv-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.iv-center .iv-label { font-size: 11px; color: #8b95a7; text-transform: uppercase; letter-spacing: .5px; }
+.iv-center .iv-val { font-size: 30px; font-weight: 800; color: #34d399; }
+.iv-center .iv-sub { font-size: 11px; color: #6b7689; margin-top: 2px; }
+.iv-legend { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+.iv-legend span { font-size: 12px; color: #9aa3b4; display: flex; align-items: center; gap: 5px; }
+.iv-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* ── DCF ── */
+.dcf-card h2 { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+.dcf-sub { color: #6b7689; font-size: 12px; margin-bottom: 16px; }
+.dcf-hint { font-size: 12px; color: #8b95a7; margin-bottom: 14px; background: #0f1420; border-radius: 8px; padding: 9px 13px; }
+.dcf-hint b { color: #b0b8c8; }
+.dcf-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+.dcf-table th { background: #0f1420; padding: 8px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; border: 1px solid #232a3a; text-align: center; color: #6b7689; }
+.dcf-table th.low { color: #f87171; } .dcf-table th.mid { color: #fbbf24; } .dcf-table th.high { color: #34d399; }
+.dcf-table td { padding: 6px 8px; border: 1px solid #232a3a; font-size: 12px; color: #9aa3b4; font-weight: 600; background: #0f1420; }
+.dcf-table td.in { background: #0a0d14; padding: 5px 6px; }
+.dcf-table input { width: 100%; background: transparent; border: 1px solid #2a3142; border-radius: 6px; padding: 6px 8px; color: #e8edf5; font-size: 13px; font-weight: 600; text-align: center; outline: none; }
+.dcf-table input:focus { border-color: #34d399; }
+
+/* ── Stock Analyzer (EM-style) ── */
+.az-card { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; padding: 20px; margin-bottom: 14px; }
+.az-controls { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; flex-wrap: wrap; }
+.az-ctl { display: flex; align-items: center; gap: 8px; }
+.az-ctl label { font-size: 12px; color: #9aa3b4; font-weight: 600; }
+.az-ctl select { background: #0a0d14; border: 1px solid #2a3142; border-radius: 7px; padding: 7px 12px; color: #e8edf5; font-size: 13px; font-weight: 700; outline: none; cursor: pointer; }
+.az-pill { background: #0f1420; border: 1px solid #2a3142; border-radius: 7px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: #b0b8c8; }
+.az-reminder { margin-left: auto; font-size: 11px; color: #fbbf24; }
+.az-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+.az-table th { background: #0f1420; padding: 8px 8px; font-size: 11px; font-weight: 700; border: 1px solid #232a3a; text-align: center; color: #6b7689; text-transform: uppercase; letter-spacing: .4px; }
+.az-table th.az-name { text-align: left; }
+.az-table th.az-grouphead { color: #8b95a7; font-size: 11px; }
+.az-table th.az-grouphead.az-myhead { color: #34d399; }
+.az-table th.low { color: #f87171; } .az-table th.mid { color: #fbbf24; } .az-table th.high { color: #34d399; }
+.az-table td { padding: 7px 10px; border: 1px solid #232a3a; font-size: 13px; text-align: center; background: #0f1420; }
+.az-table td.az-rowname { text-align: left; font-weight: 700; color: #b0b8c8; background: #131826; }
+.az-table td.az-hist { color: #8b95a7; font-weight: 600; }
+.az-table td.az-in { background: #0a0d14; padding: 4px 6px; }
+.az-table td.az-in input { width: 100%; background: transparent; border: 1px solid #2a3142; border-radius: 6px; padding: 6px 6px; color: #e8edf5; font-size: 13px; font-weight: 700; text-align: center; outline: none; }
+.az-table td.az-in input:focus { border-color: #34d399; }
+.az-table tr.az-display td.az-in { background: #131826; color: #6b7689; font-weight: 600; }
+.az-priceline { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
+.az-priceline b { color: #34d399; font-size: 18px; }
+#azBtn { background: #34d399; color: #07120c; border: none; border-radius: 8px; padding: 11px 36px; font-size: 15px; font-weight: 800; cursor: pointer; transition: background .2s; }
+#azBtn:hover { background: #10b981; }
+.az-results-grid { display: grid; grid-template-columns: 280px 1fr; gap: 16px; margin-top: 16px; align-items: center; }
+@media (max-width: 800px) { .az-results-grid { grid-template-columns: 1fr; } }
+.az-result-table { width: 100%; border-collapse: collapse; }
+.az-result-table th { padding: 9px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; border: 1px solid #232a3a; background: #0f1420; }
+.az-result-table th.low { color: #f87171; } .az-result-table th.mid { color: #fbbf24; } .az-result-table th.high { color: #34d399; }
+.az-result-table td { padding: 12px; font-size: 16px; font-weight: 800; text-align: center; border: 1px solid #232a3a; background: #0f1420; }
+.az-result-table td.az-rlabel { text-align: left; font-size: 13px; font-weight: 700; color: #b0b8c8; background: #131826; }
+.az-result-table td.low { color: #f87171; } .az-result-table td.mid { color: #fbbf24; } .az-result-table td.high { color: #34d399; }
+.az-result-table td .rsub { font-size: 11px; font-weight: 600; color: #6b7689; display: block; margin-top: 2px; }
+.dcf-bottom { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.dcf-field label { font-size: 11px; color: #9aa3b4; font-weight: 600; display: block; margin-bottom: 5px; }
+.dcf-field input { width: 100%; background: #0a0d14; border: 1px solid #2a3142; border-radius: 7px; padding: 8px 11px; color: #e8edf5; font-size: 13px; font-weight: 600; outline: none; }
+.dcf-field input:focus { border-color: #34d399; }
+#calcBtn { background: #34d399; color: #07120c; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 800; cursor: pointer; width: 100%; transition: background .2s; }
+#calcBtn:hover { background: #10b981; }
+.price-targets { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-top: 14px; }
+.pt { border-radius: 9px; padding: 14px; text-align: center; border: 1.5px solid; }
+.pt.low { border-color: #f87171; background: rgba(248,113,113,.06); }
+.pt.mid { border-color: #fbbf24; background: rgba(251,191,36,.06); }
+.pt.high { border-color: #34d399; background: rgba(52,211,153,.06); }
+.pt .ptl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+.pt.low .ptl { color: #f87171; } .pt.mid .ptl { color: #fbbf24; } .pt.high .ptl { color: #34d399; }
+.pt .ptv { font-size: 22px; font-weight: 800; }
+.pt .pti { font-size: 12px; margin-top: 4px; }
+
+/* ── Rating ── */
+.rating-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.rating-row .rt-q { font-size: 13px; font-weight: 700; color: #b0b8c8; }
+.rt-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #2a3142; background: #0f1420; color: #9aa3b4; font-size: 15px; font-weight: 800; cursor: pointer; transition: all .15s; }
+.rt-btn:hover, .rt-btn.sel { transform: scale(1.08); }
+.rt-btn[data-r="1"]:hover, .rt-btn[data-r="1"].sel { border-color:#ef4444; color:#ef4444; }
+.rt-btn[data-r="2"]:hover, .rt-btn[data-r="2"].sel { border-color:#fb923c; color:#fb923c; }
+.rt-btn[data-r="3"]:hover, .rt-btn[data-r="3"].sel { border-color:#fbbf24; color:#fbbf24; }
+.rt-btn[data-r="4"]:hover, .rt-btn[data-r="4"].sel { border-color:#a3e635; color:#a3e635; }
+.rt-btn[data-r="5"]:hover, .rt-btn[data-r="5"].sel { border-color:#34d399; color:#34d399; }
+.rt-scale { font-size: 10px; color: #6b7689; }
+.rt-idk { font-size: 12px; color: #8b95a7; background: #0f1420; border: 1px solid #2a3142; border-radius: 20px; padding: 8px 14px; cursor: pointer; }
+.rt-idk:hover { color: #b0b8c8; }
+
+/* ── Charts ── */
+.section-title { font-size: 11px; font-weight: 700; color: #6b7689; text-transform: uppercase; letter-spacing: .8px; margin: 14px 0 10px; }
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 700px) { .charts-grid { grid-template-columns: 1fr; } }
+.chart-card { background: #161b28; border: 1px solid #232a3a; border-radius: 12px; padding: 16px; }
+.chart-card h3 { font-size: 12px; font-weight: 600; color: #9aa3b4; margin-bottom: 12px; }
+.chart-wrap { position: relative; height: 170px; }
+.disclaimer { font-size: 11px; color: #4b5567; padding: 13px 16px; background: #0f1420; border-radius: 8px; line-height: 1.6; margin-top: 14px; }
+.disclaimer b { color: #6b7689; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo"><span class="ev">EVERYTHING</span> <span class="money">MONEY</span><small>STOCK ANALYZER · STYLE CLONE</small></div>
+  <div class="search-wrap">
+    <input type="text" id="tickerInput" placeholder="Stock Search — e.g. MSFT" maxlength="10" />
+    <button id="analyzeBtn" onclick="analyze()">Analyze</button>
+  </div>
+  <div class="level-badge">
+    <div class="lvl-txt">Professional Investor<br><b>Level 4</b></div>
+    <div class="lvl-bar"><div></div></div>
+  </div>
+</div>
+
+<div class="main">
+  <div id="content">
+    <div class="placeholder">
+      <h2>Enter a ticker to get started</h2>
+      <p>Live data · My Pillars + EM Pillars · 40+ metrics · Intrinsic value</p>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentData = null;
+let charts = {};
+const $ = id => document.getElementById(id);
+
+// Talk to the Flask server explicitly so it works even if this file is
+// opened directly (file://) instead of served from localhost:5001.
+const API_BASE = (location.protocol === 'file:' || location.port !== '5001')
+  ? 'http://localhost:5001' : '';
+
+$('tickerInput').addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
+
+function n(v, dec=2, suf='') { return (v==null||isNaN(v)) ? '—' : v.toFixed(dec)+suf; }
+function pct(v, dec=2) { return v==null ? '—' : v.toFixed(dec)+'%'; }
+function money(v) {
+  if (v==null||isNaN(v)) return '—';
+  const s = v<0?'-':'', a = Math.abs(v);
+  if (a>=1e12) return s+'$'+(a/1e12).toFixed(2)+'T';
+  if (a>=1e9)  return s+'$'+(a/1e9).toFixed(2)+'B';
+  if (a>=1e6)  return s+'$'+(a/1e6).toFixed(2)+'M';
+  return s+'$'+a.toFixed(0);
+}
+function price(v) { return v==null ? '—' : '$'+v.toFixed(2); }
+function color(v, g, b) { if (v==null) return ''; if (v>=g) return 'good'; if (v<=b) return 'bad'; return 'neutral'; }
+
+async function analyze() {
+  const t = $('tickerInput').value.trim().toUpperCase();
+  if (!t) return;
+  const btn = $('analyzeBtn'); btn.disabled = true; btn.textContent = '…';
+  $('content').innerHTML = `<div class="status-msg"><div class="spinner"></div><div>Fetching <strong>${t}</strong>…</div></div>`;
+  Object.values(charts).forEach(c=>c.destroy()); charts = {};
+  try {
+    const res = await fetch(`${API_BASE}/api/analyze/${t}`);
+    const txt = await res.text();
+    let j; try { j = JSON.parse(txt); } catch(e){ throw new Error(`JSON error: ${e.message} — ${txt.slice(0,300)}`); }
+    if (!j.success) throw new Error(j.error);
+    currentData = j.data; renderAll(j.data);
+  } catch(err) { $('content').innerHTML = `<div class="status-msg error">⚠ ${err.message}</div>`; }
+  btn.disabled = false; btn.textContent = 'Analyze';
+}
+
+function renderAll(d) {
+  const myP = d.pillars.filter(p=>p.group==='my');
+  const emP = d.pillars.filter(p=>p.group==='em');
+  $('content').innerHTML = `
+    <div class="banner">
+      <div>
+        <div class="banner-name">${d.name} <span>(${d.ticker})</span></div>
+        <div class="banner-meta">${d.sector} · ${d.industry} · <span style="color:#34d399">${d.data_source} · ${d.years_of_data} yrs data</span>${d.fin_currency!=='USD' && d.data_source!=='SEC EDGAR' ? ` · <span style="color:#fbbf24">⚠ ${d.fin_currency}→USD @ ${d.fx_rate.toFixed(4)}</span>` : ''}${d.years_of_data && d.years_of_data < 5 ? ` · <span style="color:#fbbf24">⚠ limited history — longer periods show N/A</span>` : ''}</div>
+      </div>
+      <div class="banner-price"><div class="price">${price(d.current_price)}</div><div class="price-label">Current Price</div></div>
+    </div>
+
+    <div class="pillar-block">
+      <div class="pillar-label"><div class="badge">★</div><div class="lbl">My Pillars</div></div>
+      <div class="pillar-grid my">${myP.map(pcell).join('')}</div>
+    </div>
+    <div class="pillar-block">
+      <div class="pillar-label"><div class="badge">EM</div><div class="lbl">EM Pillars</div></div>
+      <div class="pillar-grid em">${emP.map(pcell).join('')}</div>
+    </div>
+
+    <div class="metrics-section" id="metricsSection"></div>
+
+    <div class="section-title">Stock Analyzer</div>
+    <div class="az-card">
+      <div class="az-controls">
+        <div class="az-ctl"><label>Years</label>
+          <select id="az_years"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
+        </div>
+        <div class="az-ctl"><label>Scenarios</label><span class="az-pill">3 (Low, Mid &amp; High)</span></div>
+        <div class="az-reminder">⚠ This does not factor in the balance sheet</div>
+      </div>
+
+      <table class="az-table">
+        <thead>
+          <tr>
+            <th rowspan="2" class="az-name">Assumption</th>
+            <th colspan="3" class="az-grouphead">Historical</th>
+            <th colspan="3" class="az-grouphead az-myhead">My Assumptions</th>
+          </tr>
+          <tr>
+            <th>1 Year</th><th>5 Years</th><th>10 Years</th>
+            <th class="low">Low</th><th class="mid">Mid</th><th class="high">High</th>
+          </tr>
+        </thead>
+        <tbody id="azBody"></tbody>
+      </table>
+
+      <div class="az-priceline">
+        <div>Current Price <b id="azPrice">${price(d.current_price)}</b></div>
+        <button id="azBtn" onclick="runAnalyzer()">Analyze</button>
+      </div>
+
+      <div id="azResults" style="display:none">
+        <div class="az-results-grid">
+          <div class="iv-card">
+            <div class="iv-donut-wrap">
+              <canvas id="ivDonut"></canvas>
+              <div class="iv-center"><div class="iv-label">Intrinsic Value</div><div class="iv-val" id="ivVal">—</div><div class="iv-sub" id="ivSub"></div></div>
+            </div>
+            <div class="iv-legend"><span><i style="background:#f87171"></i>Low</span><span><i style="background:#fbbf24"></i>Mid</span><span><i style="background:#34d399"></i>High</span></div>
+          </div>
+          <table class="az-result-table">
+            <thead><tr><th></th><th class="low">Low</th><th class="mid">Mid</th><th class="high">High</th></tr></thead>
+            <tbody id="azResultBody"></tbody>
+          </table>
+        </div>
+        <div class="rating-row" id="ratingRow">
+          <span class="rt-q">Your Rating?</span>
+          <button class="rt-btn" data-r="1" onclick="rate(this)">1</button>
+          <button class="rt-btn" data-r="2" onclick="rate(this)">2</button>
+          <button class="rt-btn" data-r="3" onclick="rate(this)">3</button>
+          <button class="rt-btn" data-r="4" onclick="rate(this)">4</button>
+          <button class="rt-btn" data-r="5" onclick="rate(this)">5</button>
+          <span class="rt-scale">1 = Strong Sell &nbsp;·&nbsp; 5 = Strong Buy</span>
+          <button class="rt-idk" onclick="rate(null)">I don't know enough</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Financial Trends</div>
+    <div class="charts-grid">
+      <div class="chart-card"><h3>Annual Revenue</h3><div class="chart-wrap"><canvas id="revChart"></canvas></div></div>
+      <div class="chart-card"><h3>Free Cash Flow</h3><div class="chart-wrap"><canvas id="fcfChart"></canvas></div></div>
+      <div class="chart-card"><h3>Net Income</h3><div class="chart-wrap"><canvas id="niChart"></canvas></div></div>
+      <div class="chart-card"><h3>Shares Outstanding</h3><div class="chart-wrap"><canvas id="sharesChart"></canvas></div></div>
+    </div>
+
+    <div class="disclaimer"><b>Disclaimer:</b> Educational tool, not financial advice. Data via Yahoo Finance — may be delayed or differ from paid sources (esp. 5yr/10yr history for foreign listings). Always do your own research.</div>
+  `;
+  renderMetrics(d);
+  renderCharts(d);
+  prefillDCF(d);
+}
+
+function pcell(p) {
+  const cls = p.pass===true?'pass':p.pass===false?'fail':'unknown';
+  const mk  = p.pass===true?'✓':p.pass===false?'✕':'?';
+  return `<div class="pcell ${cls}">
+    <div><div class="pname">${p.name}</div><div class="pthresh">${p.threshold}</div></div>
+    <div class="pright"><span class="pval">${p.value||'—'}</span><span class="pmark ${cls}">${mk}</span></div>
+  </div>`;
+}
+
+function row(label, value, cls='', sub='') {
+  const s = sub ? ` <small>${sub}</small>` : '';
+  return `<div class="mrow"><span class="ml">${label}${s}</span><span class="mv ${cls}">${value}</span></div>`;
+}
+function maRow(label, val, cp) {
+  if (val==null) return `<div class="mrow"><span class="ml">${label}</span><span class="mv dim">—</span></div>`;
+  const above = cp && cp > val;
+  return `<div class="mrow"><span class="ml">${label}</span><span class="mv"><span class="ma-arrow"><span class="ar ${above?'up':'down'}">${above?'▲':'▼'}</span>${price(val)}</span></span></div>`;
+}
+
+function renderMetrics(d) {
+  const cp = d.current_price;
+  $('metricsSection').innerHTML = `
+    <div class="mcol">
+      <div class="mcol-title">Valuation & Growth</div>
+      ${row('Market Cap', money(d.market_cap))}
+      ${row('Revenue (TTM)', money(d.last_revenue))}
+      ${row('Net Income (TTM)', money(d.last_net_income), d.last_net_income>0?'good':'bad')}
+      ${row('5Yr Avg Net Income', money(d.avg_ni_5yr))}
+      ${row('P/E (TTM)', d.pe_ttm?n(d.pe_ttm,2):'—')}
+      ${row('5Yr P/E', d.pe_5yr?n(d.pe_5yr,2):'—', d.pe_5yr?(d.pe_5yr<22.5?'good':'bad'):'')}
+      ${row('PS Ratio', d.ps_ratio?n(d.ps_ratio,2):'—', d.ps_ratio?(d.ps_ratio<2?'good':d.ps_ratio<5?'neutral':'bad'):'')}
+      ${row('PEG Ratio', d.peg_past5?n(d.peg_past5,2):'N/A', '', 'Past 5yr')}
+      ${row('PEG Ratio', d.peg_forward?n(d.peg_forward,2):'N/A', d.peg_forward?(d.peg_forward<1?'good':d.peg_forward<2?'neutral':'bad'):'', 'Fwd 3yr')}
+      ${row('Profit Margin (TTM)', pct(d.profit_margin_ttm), color(d.profit_margin_ttm,15,5))}
+      ${row('5Yr Profit Margin', pct(d.profit_margin_5yr), color(d.profit_margin_5yr,15,5))}
+      ${row('10Yr Profit Margin', pct(d.profit_margin_10yr))}
+      ${row('Gross Profit Margin', pct(d.gross_margin), color(d.gross_margin,50,30))}
+      ${row('3Yr Rev Growth', pct(d.rev_cagr_3,2), color(d.rev_cagr_3,10,3))}
+      ${row('5Yr Rev Growth', pct(d.rev_cagr_5,2), color(d.rev_cagr_5,10,3))}
+      ${row('10Yr Rev Growth', pct(d.rev_cagr_10,2), color(d.rev_cagr_10,10,3))}
+    </div>
+
+    <div class="mcol">
+      <div class="mcol-title">Cash Flow & Enterprise Value</div>
+      ${row('Free Cash Flow (TTM)', money(d.last_fcf), d.last_fcf>0?'good':'bad')}
+      ${row('5Yr Avg FCF', money(d.avg_fcf_5yr), d.avg_fcf_5yr>0?'good':'bad')}
+      ${row('Price/FCF (TTM)', d.p_fcf_ttm?n(d.p_fcf_ttm,2):'—', d.p_fcf_ttm?(d.p_fcf_ttm<15?'good':d.p_fcf_ttm<25?'neutral':'bad'):'')}
+      ${row('5Yr Price/FCF', d.p_fcf_5yr?n(d.p_fcf_5yr,2):'—', d.p_fcf_5yr?(d.p_fcf_5yr<15?'good':d.p_fcf_5yr<22.5?'neutral':'bad'):'')}
+      ${row('Dividend Yield (TTM)', d.div_yield?pct(d.div_yield,2):'None')}
+      ${row('Dividends Paid', money(d.dividends_paid))}
+      ${row('Forward Dividend Yield', d.fwd_div_yield?pct(d.fwd_div_yield,2):'None')}
+      ${row('EV (Traditional)', money(d.enterprise_value))}
+      ${row("EV (Paul's Formula)", money(d.pauls_ev))}
+      ${row('ROIC (TTM)', pct(d.roic_ttm), color(d.roic_ttm,12,6))}
+      ${row('5Yr ROIC', pct(d.roic_5yr), color(d.roic_5yr,9,4))}
+      ${row('Total 5Yr Net Acquisitions', money(-Math.abs(d.acquisitions_5yr||0)))}
+      ${row('52 Wk High', price(d.week52_high), '', d.week52_high_date||'')}
+      ${row('52 Wk Low', price(d.week52_low), '', d.week52_low_date||'')}
+      ${row('All-Time High', price(d.ath), '', d.ath_date||'')}
+    </div>
+
+    <div class="mcol">
+      <div class="mcol-title">Returns & EV Ratios</div>
+      ${row('Forward P/E', d.forward_pe?n(d.forward_pe,2):'—')}
+      ${row('Return on Assets', pct(d.roa), color(d.roa,8,3))}
+      ${row('Return on Equity', pct(d.roe), color(d.roe,15,8))}
+      ${row('EV / Earnings', d.ev_earnings?n(d.ev_earnings,2):'—')}
+      ${row('EV / FCF', d.ev_fcf?n(d.ev_fcf,2):'—', d.ev_fcf?(d.ev_fcf<15?'good':d.ev_fcf<25?'neutral':'bad'):'')}
+      ${row('EV / 5Yr Earnings', d.ev_5yr_earnings?n(d.ev_5yr_earnings,2):'—')}
+      ${row('EV / 5Yr FCF', d.ev_5yr_fcf?n(d.ev_5yr_fcf,2):'—', d.ev_5yr_fcf?(d.ev_5yr_fcf<15?'good':d.ev_5yr_fcf<25?'neutral':'bad'):'')}
+    </div>
+
+    <div class="mcol">
+      <div class="mcol-title">Book Value & Moving Avgs</div>
+      ${row('5Yr Book Value Growth', pct(d.bv_cagr_5yr,2), color(d.bv_cagr_5yr,10,3))}
+      ${row('10Yr Book Value Growth', pct(d.bv_cagr_10yr,2), color(d.bv_cagr_10yr,10,3))}
+      ${maRow('25 Day MA', d.ma_25, cp)}
+      ${maRow('50 Day MA', d.ma_50, cp)}
+      ${maRow('100 Day MA', d.ma_100, cp)}
+      ${maRow('200 Day MA', d.ma_200, cp)}
+    </div>
+  `;
+}
+
+function makeChart(id, labels, values, col) {
+  if (!labels.length) return;
+  const el = $(id); if (!el) return;
+  charts[id] = new Chart(el.getContext('2d'), {
+    type:'bar',
+    data:{ labels, datasets:[{ data:values, backgroundColor: values.map(v=>v>=0?(col||'#34d399'):'#f87171'), borderRadius:4 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ x:{ticks:{color:'#6b7689',font:{size:11}},grid:{color:'#1a2030'}},
+        y:{ticks:{color:'#6b7689',font:{size:10},callback:v=>{const a=Math.abs(v);
+          if(a>=1e12)return(v<0?'-':'')+'$'+(a/1e12).toFixed(1)+'T';
+          if(a>=1e9)return(v<0?'-':'')+'$'+(a/1e9).toFixed(1)+'B';
+          if(a>=1e6)return(v<0?'-':'')+'$'+(a/1e6).toFixed(1)+'M';
+          if(a>=1e3)return(v<0?'-':'')+(a/1e3).toFixed(0)+'K'; return v;}},grid:{color:'#1a2030'}}}}
+  });
+}
+function renderCharts(d) {
+  if (d.revenues.length)      makeChart('revChart', d.revenues.map(r=>r[0]), d.revenues.map(r=>r[1]), '#34d399');
+  if (d.fcfs.length)          makeChart('fcfChart', d.fcfs.map(r=>r[0]), d.fcfs.map(r=>r[1]));
+  if (d.net_incomes.length)   makeChart('niChart', d.net_incomes.map(r=>r[0]), d.net_incomes.map(r=>r[1]), '#60a5fa');
+  if (d.shares_history.length)makeChart('sharesChart', d.shares_history.map(r=>r[0]), d.shares_history.map(r=>r[1]), '#a78bfa');
+}
+
+function prefillDCF(d) {
+  // Build the assumption table: historical 1/5/10yr reference + Low/Mid/High inputs.
+  const r1 = v => (v==null||isNaN(v)) ? '' : Math.round(v*10)/10;
+  const h = (v, suf='%') => v==null ? '—' : v.toFixed(2)+suf;
+
+  // Historical references
+  const rg1 = d.rev_cagr_1, rg5 = d.rev_cagr_5, rg10 = d.rev_cagr_10;
+  const pm1 = d.profit_margin_ttm, pm5 = d.profit_margin_5yr, pm10 = d.profit_margin_10yr;
+  const fmH1 = d.fcf_margin_ttm, fmH5 = d.fcf_margin_5yr, fmH10 = d.fcf_margin_10yr;
+  const roi1 = d.roic_ttm, roi5 = d.roic_5yr, roi10 = d.roic_10yr;
+
+  // Sensible default assumptions (conservative around history)
+  const baseRg = rg5 || rg10 || rg1 || 5;
+  const basePm = pm5 || pm1 || 15;
+  const baseFm = fmH5 || fmH1 || 15;
+  const basePe = Math.min(d.pe_5yr || 20, 25);
+  const basePf = Math.min(d.p_fcf_5yr || 20, 25);
+
+  function inputRow(name, id, h1, h5, h10, lo, mid, hi, suffix) {
+    return `<tr>
+      <td class="az-rowname">${name}</td>
+      <td class="az-hist">${h(h1,suffix)}</td><td class="az-hist">${h(h5,suffix)}</td><td class="az-hist">${h(h10,suffix)}</td>
+      <td class="az-in"><input type="number" id="${id}_low"  value="${lo}"></td>
+      <td class="az-in"><input type="number" id="${id}_mid"  value="${mid}"></td>
+      <td class="az-in"><input type="number" id="${id}_high" value="${hi}"></td>
+    </tr>`;
+  }
+  function displayRow(name, h1, h5, h10, suffix) {
+    return `<tr class="az-display">
+      <td class="az-rowname">${name}</td>
+      <td class="az-hist">${h(h1,suffix)}</td><td class="az-hist">${h(h5,suffix)}</td><td class="az-hist">${h(h10,suffix)}</td>
+      <td class="az-in">—</td><td class="az-in">—</td><td class="az-in">—</td>
+    </tr>`;
+  }
+
+  $('azBody').innerHTML =
+    displayRow('ROIC', roi1, roi5, roi10, '%') +
+    inputRow('Rev. Growth %', 'az_rg', rg1, rg5, rg10, r1(Math.max(0,baseRg*0.7)), r1(baseRg), r1(baseRg*1.3), '%') +
+    inputRow('Profit Margin', 'az_pm', pm1, pm5, pm10, r1(basePm*0.9), r1(basePm), r1(basePm*1.1), '%') +
+    inputRow('Free Cash Flow Margin', 'az_fm', fmH1, fmH5, fmH10, r1(baseFm*0.9), r1(baseFm), r1(baseFm*1.1), '%') +
+    inputRow('P/E', 'az_pe', d.pe_ttm, d.pe_5yr, null, r1(basePe*0.85), r1(basePe), r1(basePe*1.15), '') +
+    inputRow('P/FCF', 'az_pf', d.p_fcf_ttm, d.p_fcf_5yr, null, r1(basePf*0.85), r1(basePf), r1(basePf*1.15), '') +
+    inputRow('Desired Annual Return', 'az_dr', null, null, null, 9, 9, 9, '%');
+}
+
+async function runAnalyzer() {
+  if (!currentData) return;
+  const g = id => parseFloat($(id).value);
+  const payload = {
+    current_price: currentData.current_price,
+    shares_outstanding: currentData.shares_outstanding,
+    last_revenue: currentData.last_revenue,
+    years: parseInt($('az_years').value),
+    rev_growth_low:g('az_rg_low'), rev_growth_mid:g('az_rg_mid'), rev_growth_high:g('az_rg_high'),
+    profit_margin_low:g('az_pm_low'), profit_margin_mid:g('az_pm_mid'), profit_margin_high:g('az_pm_high'),
+    fcf_margin_low:g('az_fm_low'), fcf_margin_mid:g('az_fm_mid'), fcf_margin_high:g('az_fm_high'),
+    pe_low:g('az_pe_low'), pe_mid:g('az_pe_mid'), pe_high:g('az_pe_high'),
+    pfcf_low:g('az_pf_low'), pfcf_mid:g('az_pf_mid'), pfcf_high:g('az_pf_high'),
+    desired_return_low:g('az_dr_low'), desired_return_mid:g('az_dr_mid'), desired_return_high:g('az_dr_high'),
+  };
+  const res = await fetch(`${API_BASE}/api/dcf`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const j = await res.json();
+  if (!j.success) { alert(j.error); return; }
+  const r = j.result, cp = currentData.current_price;
+  $('azResults').style.display = 'block';
+
+  // Donut shows the blended (avg of two methods) mid intrinsic value
+  const blended = s => (r[s].earnings_value + r[s].dcf_value) / 2;
+  const midVal = blended('mid');
+  $('ivVal').textContent = price(midVal);
+  const up = (midVal/cp - 1) * 100;
+  $('ivSub').innerHTML = `<span style="color:${up>=0?'#34d399':'#f87171'}">${up>=0?'+':''}${up.toFixed(0)}% vs price</span>`;
+  if (charts.ivDonut) charts.ivDonut.destroy();
+  const lo=blended('low'), hi=blended('high');
+  charts.ivDonut = new Chart($('ivDonut').getContext('2d'), {
+    type:'doughnut',
+    data:{ datasets:[{ data:[lo, Math.max(0,midVal-lo), Math.max(0,hi-midVal)], backgroundColor:['#f87171','#fbbf24','#34d399'], borderWidth:0 }] },
+    options:{ cutout:'72%', plugins:{legend:{display:false},tooltip:{enabled:false}} }
+  });
+
+  const cell = (cls, val, sub) => `<td class="${cls}">${val}${sub?`<span class="rsub">${sub}</span>`:''}</td>`;
+  const upTxt = u => u==null?'':`${u>=0?'+':''}${u}%`;
+  $('azResultBody').innerHTML =
+    `<tr><td class="az-rlabel">Multiple of Earnings Value</td>${cell('low',price(r.low.earnings_value),upTxt(r.low.earnings_upside))}${cell('mid',price(r.mid.earnings_value),upTxt(r.mid.earnings_upside))}${cell('high',price(r.high.earnings_value),upTxt(r.high.earnings_upside))}</tr>` +
+    `<tr><td class="az-rlabel">Discounted Cash Flow Value</td>${cell('low',price(r.low.dcf_value),upTxt(r.low.dcf_upside))}${cell('mid',price(r.mid.dcf_value),upTxt(r.mid.dcf_upside))}${cell('high',price(r.high.dcf_value),upTxt(r.high.dcf_upside))}</tr>` +
+    `<tr><td class="az-rlabel">Current Price Return</td>${cell('low',(r.low.price_return??'—')+'%','per year')}${cell('mid',(r.mid.price_return??'—')+'%','per year')}${cell('high',(r.high.price_return??'—')+'%','per year')}</tr>`;
+}
+
+function rate(btn) {
+  document.querySelectorAll('.rt-btn').forEach(b=>b.classList.remove('sel'));
+  if (btn) btn.classList.add('sel');
+}
+</script>
+</body>
+</html>
