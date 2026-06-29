@@ -209,10 +209,10 @@ let currentData = null;
 let charts = {};
 const $ = id => document.getElementById(id);
 
-// Talk to the Flask server explicitly so it works even if this file is
-// opened directly (file://) instead of served from localhost:5001.
-const API_BASE = (location.protocol === 'file:' || location.port !== '5001')
-  ? 'http://localhost:5001' : '';
+// When served by a real web server (local dev OR deployed), call the API on the
+// SAME origin via relative URLs. Only when this file is opened directly from disk
+// (file://, e.g. the preview panel) do we point at the local dev server.
+const API_BASE = (location.protocol === 'file:') ? 'http://localhost:5001' : '';
 
 $('tickerInput').addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
 
