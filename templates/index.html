@@ -21,6 +21,8 @@ body { background: #0a0d14; color: #e8edf5; font-family: 'Segoe UI', system-ui, 
 #analyzeBtn { background: #34d399; color: #07120c; border: none; border-radius: 8px; padding: 9px 20px; font-size: 14px; font-weight: 800; cursor: pointer; transition: background .2s; }
 #analyzeBtn:hover { background: #10b981; }
 #analyzeBtn:disabled { background: #2a3142; color: #5b6478; cursor: not-allowed; }
+.nav-scanner { color: #8b95a7; text-decoration: none; font-size: 13px; font-weight: 600; padding: 8px 15px; border-radius: 8px; border: 1px solid #232a3a; white-space: nowrap; transition: .15s; }
+.nav-scanner:hover { color: #34d399; border-color: #34d399; }
 .level-badge { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .level-badge .lvl-txt { font-size: 11px; color: #8b95a7; text-align: right; line-height: 1.3; }
 .level-badge .lvl-txt b { color: #e8edf5; }
@@ -189,6 +191,7 @@ body { background: #0a0d14; color: #e8edf5; font-family: 'Segoe UI', system-ui, 
     <input type="text" id="tickerInput" placeholder="Stock Search — e.g. MSFT" maxlength="10" />
     <button id="analyzeBtn" onclick="analyze()">Analyze</button>
   </div>
+  <a href="/scanner" class="nav-scanner">Scanners →</a>
   <div class="level-badge">
     <div class="lvl-txt">Professional Investor<br><b>Level 4</b></div>
     <div class="lvl-bar"><div></div></div>
@@ -252,7 +255,7 @@ function renderAll(d) {
     <div class="banner">
       <div>
         <div class="banner-name">${d.name} <span>(${d.ticker})</span></div>
-        <div class="banner-meta">${d.sector} · ${d.industry} · <span style="color:#34d399">${d.data_source} · ${d.years_of_data} yrs data</span>${d.fin_currency!=='USD' && d.data_source!=='SEC EDGAR' ? ` · <span style="color:#fbbf24">⚠ ${d.fin_currency}→USD @ ${d.fx_rate.toFixed(4)}</span>` : ''}${d.years_of_data && d.years_of_data < 5 ? ` · <span style="color:#fbbf24">⚠ limited history — longer periods show N/A</span>` : ''}</div>
+        <div class="banner-meta">${d.sector} · ${d.industry} · <span style="color:#34d399">${d.data_source} · ${d.years_of_data} yrs data</span>${d.fin_currency!=='USD' && d.data_source!=='SEC EDGAR' ? ` · <span style="color:#fbbf24">⚠ ${d.fin_currency}→USD @ ${d.fx_rate.toFixed(4)}</span>` : ''}${d.years_of_data && d.years_of_data < 5 ? ` · <span style="color:#fbbf24">⚠ limited history — longer periods show N/A</span>` : ''}${(d.notices||[]).map(nt=>` · <span style="color:#fbbf24">⚠ ${nt}</span>`).join('')}${d.cache_age_minutes!=null && d.cache_age_minutes>0 ? ` · <span style="color:#8b95a7">cached ${d.cache_age_minutes<60 ? d.cache_age_minutes+'m' : Math.round(d.cache_age_minutes/60)+'h'} ago</span>` : ''}</div>
       </div>
       <div class="banner-price"><div class="price">${price(d.current_price)}</div><div class="price-label">Current Price</div></div>
     </div>
@@ -391,8 +394,8 @@ function renderMetrics(d) {
       ${row('Dividend Yield (TTM)', d.div_yield?pct(d.div_yield,2):'None')}
       ${row('Dividends Paid', money(d.dividends_paid))}
       ${row('Forward Dividend Yield', d.fwd_div_yield?pct(d.fwd_div_yield,2):'None')}
-      ${row('EV (Traditional)', money(d.enterprise_value))}
-      ${row("EV (Paul's Formula)", money(d.pauls_ev))}
+      ${row('Enterprise Value (Traditional)', money(d.enterprise_value))}
+      ${row("Enterprise Value (Paul's Formula)", money(d.pauls_ev))}
       ${row('ROIC (TTM)', pct(d.roic_ttm), color(d.roic_ttm,12,6))}
       ${row('5Yr ROIC', pct(d.roic_5yr), color(d.roic_5yr,9,4))}
       ${row('Total 5Yr Net Acquisitions', money(-Math.abs(d.acquisitions_5yr||0)))}
