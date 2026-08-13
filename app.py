@@ -3,10 +3,159 @@ import yfinance as yf
 import numpy as np
 import math
 import os
+import json
+import time
+import tempfile
 import requests
 from datetime import date
 
 app = Flask(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resilience layer
+# Yahoo Finance blocks shared datacenter IPs (which is what free cloud hosting
+# runs on), so a deployed copy gets "Too Many Requests" even on the first call.
+# Three defenses: cache results, retry with backoff, and fall back to a lighter
+# Yahoo endpoint — then serve stale-but-usable data rather than failing outright.
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_dotenv(path='.env'):
+    """Read KEY=value lines from a local .env (gitignored) so secrets stay out of
+    the repo. On Render these come from the dashboard's environment variables."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+    except Exception:
+        pass
+_load_dotenv()
+
+# Finnhub: primary market-data source. Unlike Yahoo it welcomes server traffic,
+# so it works from cloud hosting where Yahoo blocks the shared IP. Free tier =
+# 60 calls/min; covers quote, profile and 130+ metrics (but not price history).
+FINNHUB_KEY = os.environ.get('FINNHUB_API_KEY', '').strip()
+
+CACHE_DIR = os.environ.get('CACHE_DIR', os.path.join(tempfile.gettempdir(), 'stockanalyzer_cache'))
+CACHE_TTL = int(os.environ.get('CACHE_TTL_SECONDS', 6 * 3600))   # reuse without refetching
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+BROWSER_HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+                   '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'),
+    'Accept': 'application/json,text/plain,*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+}
+
+def _cache_path(ticker):
+    return os.path.join(CACHE_DIR, f'{ticker.upper()}.json')
+
+def cache_read(ticker):
+    """Return (payload, age_in_seconds), or (None, None) if nothing cached."""
+    try:
+        with open(_cache_path(ticker)) as f:
+            blob = json.load(f)
+        return blob['data'], max(0.0, time.time() - blob['saved_at'])
+    except Exception:
+        return None, None
+
+def cache_write(ticker, data):
+    try:
+        with open(_cache_path(ticker), 'w') as f:
+            json.dump({'saved_at': time.time(), 'data': data}, f)
+    except Exception:
+        pass   # cache is best-effort; never fail a request over it
+
+def is_rate_limited(exc):
+    s = str(exc).lower()
+    return '429' in s or 'too many requests' in s or 'rate limit' in s
+
+def with_retry(fn, attempts=3, base_delay=1.5, default=None):
+    """Run fn(), retrying on rate-limit/transient errors with backoff.
+    Returns `default` instead of raising once attempts are exhausted, so one
+    blocked sub-request degrades that field rather than killing the whole page."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if i == attempts - 1:
+                return default
+            time.sleep(base_delay * (2 ** i) if is_rate_limited(e) else base_delay)
+    return default
+
+def finnhub_get(path, params):
+    if not FINNHUB_KEY:
+        return None
+    try:
+        p = dict(params); p['token'] = FINNHUB_KEY
+        r = requests.get(f'https://finnhub.io/api/v1{path}', params=p, timeout=15)
+        if r.status_code != 200:
+            return None
+        j = r.json()
+        return None if (isinstance(j, dict) and j.get('error')) else j
+    except Exception:
+        return None
+
+def finnhub_market(ticker):
+    """Quote + profile + key metrics — exactly the fields Yahoo denies us.
+    Finnhub reports market cap and share count in millions."""
+    q = finnhub_get('/quote', {'symbol': ticker})
+    if not q or not q.get('c'):
+        return None
+    prof = finnhub_get('/stock/profile2', {'symbol': ticker}) or {}
+    met  = (finnhub_get('/stock/metric', {'symbol': ticker, 'metric': 'all'}) or {}).get('metric') or {}
+
+    def d8(s):   # Finnhub dates are YYYY-MM-DD; the UI shows MM/DD/YY
+        try:
+            y, m, dd = s.split('-'); return f'{m}/{dd}/{y[2:]}'
+        except Exception:
+            return None
+
+    return {
+        'price':       q.get('c'),
+        'name':        prof.get('name'),
+        'currency':    prof.get('currency', 'USD'),
+        'industry':    prof.get('finnhubIndustry'),
+        'market_cap':  float(prof.get('marketCapitalization') or 0) * 1e6,
+        'shares':      float(prof.get('shareOutstanding') or 0) * 1e6,
+        'week52_high': met.get('52WeekHigh'),
+        'week52_low':  met.get('52WeekLow'),
+        'week52_high_date': d8(met.get('52WeekHighDate') or ''),
+        'week52_low_date':  d8(met.get('52WeekLowDate') or ''),
+        'pe_ttm':      met.get('peTTM'),
+        'div_yield':   met.get('currentDividendYieldTTM') or met.get('dividendYieldIndicatedAnnual'),
+    }
+
+def yahoo_chart(ticker, rng='2y'):
+    """Direct call to Yahoo's chart endpoint. Lighter and less aggressively
+    blocked than the scrape-based endpoints yfinance uses for .info, so it often
+    still answers when those are refused. Returns dict or None."""
+    try:
+        r = requests.get(
+            f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}',
+            params={'range': rng, 'interval': '1d'},
+            headers=BROWSER_HEADERS, timeout=15)
+        if r.status_code != 200:
+            return None
+        result = (r.json().get('chart') or {}).get('result') or []
+        if not result:
+            return None
+        res  = result[0]
+        meta = res.get('meta') or {}
+        quote = ((res.get('indicators') or {}).get('quote') or [{}])[0]
+        return {
+            'price': meta.get('regularMarketPrice'),
+            'currency': meta.get('currency', 'USD'),
+            'week52_high': meta.get('fiftyTwoWeekHigh'),
+            'week52_low': meta.get('fiftyTwoWeekLow'),
+            'timestamps': res.get('timestamp') or [],
+            'closes': [c for c in (quote.get('close') or []) if c is not None],
+            'highs':  [h for h in (quote.get('high')  or []) if h is not None],
+            'lows':   [l for l in (quote.get('low')   or []) if l is not None],
+        }
+    except Exception:
+        return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEC EDGAR — free 10+ year financial history for US filers
@@ -199,16 +348,34 @@ def extract_row(df, names):
 
 def get_data(ticker_symbol):
     stock = yf.Ticker(ticker_symbol)
-    info  = stock.info
+    notices = []          # user-facing explanations when something degraded
 
-    if not info.get('regularMarketPrice') and not info.get('currentPrice') and not info.get('marketCap'):
-        raise ValueError(f"No data found for ticker: {ticker_symbol}")
+    info = with_retry(lambda: stock.info, default=None) or {}
+    chart = None
+    fh = None
+    if not (info.get('regularMarketPrice') or info.get('currentPrice') or info.get('marketCap')):
+        # Yahoo refused us (usually a datacenter-IP block). Finnhub is the
+        # reliable substitute — it permits server traffic on its free tier.
+        fh = finnhub_market(ticker_symbol)
+        if fh:
+            notices.append('Market data via Finnhub (Yahoo is rate-limiting this server).')
+        else:
+            chart = yahoo_chart(ticker_symbol)
+        if not fh and chart and chart.get('price'):
+            notices.append('Live quote via fallback source; some market fields may be unavailable.')
+        elif not fh and not chart:
+            # No price anywhere. Rather than fail, continue on SEC EDGAR alone:
+            # fundamentals, growth and margins still work; price-derived ratios
+            # (P/E, EV, valuations) are suppressed rather than shown as zero.
+            notices.append('PRICE UNAVAILABLE — the quote provider is rate-limiting this server. '
+                           'Showing fundamentals from SEC filings; valuation ratios need a live price.')
 
-    income   = stock.income_stmt
-    cashflow = stock.cashflow
-    balance  = stock.balance_sheet
-    q_income   = stock.quarterly_income_stmt
-    q_cashflow = stock.quarterly_cashflow
+    # Statements — each guarded so one blocked call degrades a field, not the page
+    income     = with_retry(lambda: stock.income_stmt,           default=None)
+    cashflow   = with_retry(lambda: stock.cashflow,              default=None)
+    balance    = with_retry(lambda: stock.balance_sheet,         default=None)
+    q_income   = with_retry(lambda: stock.quarterly_income_stmt, default=None)
+    q_cashflow = with_retry(lambda: stock.quarterly_cashflow,    default=None)
 
     current_price      = safe(info, 'currentPrice') or safe(info, 'regularMarketPrice', 0)
     market_cap         = safe(info, 'marketCap', 0) or 0
@@ -216,6 +383,14 @@ def get_data(ticker_symbol):
     shares_outstanding = safe(info, 'sharesOutstanding', 1) or 1
     total_debt         = safe(info, 'totalDebt', 0) or 0
     total_cash         = safe(info, 'totalCash', 0) or 0
+
+    # Fallback path: fill from Finnhub (preferred) or the chart endpoint.
+    if not current_price and fh:
+        current_price      = fh.get('price') or 0
+        market_cap         = fh.get('market_cap') or market_cap
+        shares_outstanding = fh.get('shares') or shares_outstanding
+    if not current_price and chart:
+        current_price = chart.get('price') or 0
 
     # Balance-sheet items for EM-style Enterprise Value (uses TOTAL LIABILITIES)
     def bs_val(names):
@@ -337,11 +512,20 @@ def get_data(ticker_symbol):
                 shares_history = [(str(y), v) for y, v in edgar['shares_series']]
             # dividends_paid already set from TTM (last 4 quarters) above
 
+    # If the market-data endpoint was blocked we have price but no market cap.
+    # EDGAR's share count lets us rebuild it (and everything derived from it).
+    if not market_cap and current_price and shares_history:
+        shares_outstanding = shares_history[-1][1] or shares_outstanding
+        market_cap = current_price * shares_outstanding
+
     # Moving averages + 52wk high/low + ATH (with dates) from price history
     week52_high = week52_low = ath = None
     week52_high_date = week52_low_date = ath_date = None
+    ma_25 = ma_50 = ma_100 = ma_200 = None
     try:
-        hist = stock.history(period='2y')
+        hist = with_retry(lambda: stock.history(period='2y'), default=None)
+        if hist is None or hist.empty:
+            raise ValueError('no price history')
         cl   = hist['Close']
         ma_25  = float(cl.tail(25).mean())  if len(cl) >= 25  else None
         ma_50  = float(cl.tail(50).mean())  if len(cl) >= 50  else safe(info, 'fiftyDayAverage')
@@ -358,18 +542,33 @@ def get_data(ticker_symbol):
             week52_high_date = hi_idx.strftime('%m/%d/%y')
             week52_low_date  = lo_idx.strftime('%m/%d/%y')
 
-        # All-time high from full history
-        full = stock.history(period='max')
-        if not full.empty:
+        # All-time high from full history (optional — skipped if provider refuses)
+        full = with_retry(lambda: stock.history(period='max'), attempts=2, default=None)
+        if full is not None and not full.empty:
             ath_idx  = full['High'].idxmax()
             ath      = float(full['High'].max())
             ath_date = ath_idx.strftime('%m/%d/%y')
-    except:
-        ma_25 = ma_100 = None
-        ma_50  = safe(info, 'fiftyDayAverage')
-        ma_200 = safe(info, 'twoHundredDayAverage')
-        week52_high = safe(info, 'fiftyTwoWeekHigh')
-        week52_low  = safe(info, 'fiftyTwoWeekLow')
+    except Exception:
+        # Price history refused — rebuild what we can from the chart fallback
+        c = chart or yahoo_chart(ticker_symbol)
+        closes = (c or {}).get('closes') or []
+        if closes:
+            def _ma(n):
+                return float(np.mean(closes[-n:])) if len(closes) >= n else None
+            ma_25, ma_50, ma_100, ma_200 = _ma(25), _ma(50), _ma(100), _ma(200)
+            highs, lows = c.get('highs') or [], c.get('lows') or []
+            if highs: week52_high = float(max(highs[-252:]))
+            if lows:  week52_low  = float(min(lows[-252:]))
+        ma_50  = ma_50  or safe(info, 'fiftyDayAverage')
+        ma_200 = ma_200 or safe(info, 'twoHundredDayAverage')
+        week52_high = week52_high or (fh or {}).get('week52_high') or (c or {}).get('week52_high') or safe(info, 'fiftyTwoWeekHigh')
+        week52_low  = week52_low  or (fh or {}).get('week52_low')  or (c or {}).get('week52_low')  or safe(info, 'fiftyTwoWeekLow')
+        week52_high_date = week52_high_date or (fh or {}).get('week52_high_date')
+        week52_low_date  = week52_low_date  or (fh or {}).get('week52_low_date')
+        if fh:
+            notices.append('Moving averages need price history, which Finnhub\'s free tier omits.')
+        elif not notices:
+            notices.append('Price history limited by provider rate limits; some chart fields may be missing.')
 
     # ── Core TTM values (true trailing-twelve-months — what EM displays) ──
     last_revenue    = ttm_revenue if ttm_revenue is not None else \
@@ -447,13 +646,14 @@ def get_data(ticker_symbol):
         if avg_eq10 + total_debt > 0: roic_10yr = avg_ni_10yr / (avg_eq10 + total_debt) * 100
 
     # Ratios
-    pe_ttm     = safe(info, 'trailingPE')
+    pe_ttm     = safe(info, 'trailingPE') or (fh or {}).get('pe_ttm')
     forward_pe = safe(info, 'forwardPE')
     peg_trailing = safe(info, 'trailingPegRatio')
     peg_forward  = safe(info, 'pegRatio')
-    ps_ratio = market_cap / last_revenue if market_cap and last_revenue else None
-    p_fcf_ttm = market_cap / last_fcf    if last_fcf    and last_fcf    > 0 else None
-    p_fcf_5yr = market_cap / avg_fcf_5yr if avg_fcf_5yr and avg_fcf_5yr > 0 else None
+    # All price-derived, so they stay None (not 0) when no live quote is available
+    ps_ratio  = market_cap / last_revenue if market_cap and last_revenue else None
+    p_fcf_ttm = market_cap / last_fcf    if market_cap and last_fcf    and last_fcf    > 0 else None
+    p_fcf_5yr = market_cap / avg_fcf_5yr if market_cap and avg_fcf_5yr and avg_fcf_5yr > 0 else None
 
     # 5yr P/E
     pe_5yr = None
@@ -474,7 +674,7 @@ def get_data(ticker_symbol):
 
     # Dividends
     div_rate      = safe(info, 'dividendRate')
-    div_yield_raw = safe(info, 'dividendYield')
+    div_yield_raw = safe(info, 'dividendYield') or (fh or {}).get('div_yield')
     if div_rate and current_price:
         div_yield = div_rate / current_price * 100
         fwd_div_yield = div_yield
@@ -487,14 +687,14 @@ def get_data(ticker_symbol):
     # EM-style Enterprise Value uses TOTAL LIABILITIES (not just debt):
     #   Traditional = mktcap + total liabilities - cash & equivalents
     #   Paul's      = mktcap + total liabilities - cash & short-term investments
-    enterprise_value = market_cap + total_liabilities - cash_equiv
-    pauls_ev         = market_cap + total_liabilities - cash_st_inv
+    enterprise_value = (market_cap + total_liabilities - cash_equiv)  if market_cap else None
+    pauls_ev         = (market_cap + total_liabilities - cash_st_inv) if market_cap else None
 
     # EV ratios use Paul's EV (matches EM's displayed EV/Earnings, EV/FCF, etc.)
-    ev_fcf          = pauls_ev / last_fcf        if last_fcf        and last_fcf        > 0 else None
-    ev_5yr_fcf      = pauls_ev / avg_fcf_5yr     if avg_fcf_5yr     and avg_fcf_5yr     > 0 else None
-    ev_earnings     = pauls_ev / last_net_income if last_net_income and last_net_income > 0 else None
-    ev_5yr_earnings = pauls_ev / avg_ni_5yr      if avg_ni_5yr      and avg_ni_5yr      > 0 else None
+    ev_fcf          = pauls_ev / last_fcf        if pauls_ev and last_fcf        and last_fcf        > 0 else None
+    ev_5yr_fcf      = pauls_ev / avg_fcf_5yr     if pauls_ev and avg_fcf_5yr     and avg_fcf_5yr     > 0 else None
+    ev_earnings     = pauls_ev / last_net_income if pauls_ev and last_net_income and last_net_income > 0 else None
+    ev_5yr_earnings = pauls_ev / avg_ni_5yr      if pauls_ev and avg_ni_5yr      and avg_ni_5yr      > 0 else None
 
     roa = (safe(info, 'returnOnAssets') or 0) * 100 or None
     # roe already computed above (TTM NI / latest equity)
@@ -575,10 +775,11 @@ def get_data(ticker_symbol):
 
     return {
         'ticker': ticker_symbol.upper(),
-        'name': safe(info, 'longName', ticker_symbol.upper()),
-        'sector': safe(info, 'sector', 'N/A'),
-        'industry': safe(info, 'industry', 'N/A'),
+        'name': safe(info, 'longName') or (fh or {}).get('name') or ticker_symbol.upper(),
+        'sector': safe(info, 'sector') or (fh or {}).get('industry') or 'N/A',
+        'industry': safe(info, 'industry') or (fh or {}).get('industry') or 'N/A',
         'data_source': data_source,
+        'notices': notices,
         'fin_currency': fin_currency, 'fx_rate': fx_rate,
         'years_of_data': years_of_data,
         'current_price': current_price, 'market_cap': market_cap,
@@ -638,11 +839,34 @@ def index():
 
 @app.route('/api/analyze/<ticker>')
 def analyze(ticker):
+    """Serve fresh data when we can get it; fall back to cache when the upstream
+    provider blocks us, so a rate limit degrades freshness instead of the app."""
+    tk = ticker.strip().upper()
+    cached, age = cache_read(tk)
+
+    # Recent enough to reuse — skips the upstream call entirely
+    if cached and age is not None and age < CACHE_TTL and not request.args.get('refresh'):
+        cached = dict(cached, cache_age_minutes=int(age // 60))
+        return jsonify({'success': True, 'data': cached})
+
     try:
-        data = clean(get_data(ticker.strip().upper()))
+        data = clean(get_data(tk))
+        cache_write(tk, data)
         return jsonify({'success': True, 'data': data})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        if cached:   # stale, but far better than an error page
+            hours = int((age or 0) // 3600)
+            stale = dict(cached, cache_age_minutes=int((age or 0) // 60))
+            stale['notices'] = (stale.get('notices') or []) + [
+                f'Showing cached data from ~{hours}h ago — the live price provider is '
+                f'rate-limiting this server right now.']
+            return jsonify({'success': True, 'data': stale})
+        msg = str(e)
+        if is_rate_limited(e):
+            msg = ("The market-data provider is rate-limiting this server (common on free "
+                   "cloud hosting, which shares an IP). Try again in a few minutes, or run "
+                   "the app locally where your home connection isn't blocked.")
+        return jsonify({'success': False, 'error': msg}), 400
 
 def value_per_share(rev0, shares, rg, margin, multiple, discount, years):
     """EM's valuation: sum of discounted yearly flows (revenue×margin) for each
@@ -708,6 +932,39 @@ def dcf():
         return jsonify({'success': True, 'result': clean(out)})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
+
+# ── Scanners ───────────────────────────────────────────────────────────────
+@app.route('/scanner')
+def scanner_page():
+    return render_template('scanner.html')
+
+
+@app.route('/api/scan/<kind>')
+def scan_results(kind):
+    """Serve the last saved scan. `?run=1` forces a fresh scan first, which is
+    slow (the value scan sweeps ~2,000 tickers) — the 9am job normally does it."""
+    if kind not in ('earnings', 'value'):
+        return jsonify({'success': False, 'error': f'Unknown scanner: {kind}'}), 404
+
+    from scanners.common import load_scan
+    try:
+        if request.args.get('run') == '1':
+            if kind == 'earnings':
+                from scanners.earnings import scan
+                data = scan()
+            else:
+                from scanners.value import scan
+                data = scan(max_names=int(request.args.get('limit', 25)))
+        else:
+            data = load_scan(kind)
+            if data is None:
+                return jsonify({'success': False,
+                                'error': 'No scan saved yet — run one to populate it.',
+                                'empty': True}), 200
+        return jsonify({'success': True, 'data': clean(data)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     # Local dev server. In production, gunicorn imports `app:app` instead (see Procfile).
